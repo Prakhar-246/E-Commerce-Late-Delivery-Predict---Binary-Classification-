@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
+import ServerColdStartOverlay from './components/ServerColdStartOverlay';
 import Dashboard from './pages/Dashboard';
 import PredictDelivery from './pages/PredictDelivery';
 import PredictionHistory from './pages/PredictionHistory';
@@ -9,33 +10,42 @@ import AboutModel from './pages/AboutModel';
 import { api } from './api/client';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('predict'); // Default to predict tab for instant ML testing
   const [backendConnected, setBackendConnected] = useState(false);
   const [isPreviewMode, setIsPreviewMode] = useState(true);
 
-  // Poll backend health once on load and every 20 seconds
+  const checkBackend = useCallback(async () => {
+    try {
+      const health = await api.checkHealth();
+      const isOk = health.status === 'ok' && health.model_loaded;
+      setBackendConnected(isOk);
+      return isOk;
+    } catch {
+      setBackendConnected(false);
+      return false;
+    }
+  }, []);
+
+  // Poll backend health: rapidly every 2.5s while cold, then every 30s once live
   useEffect(() => {
     let isMounted = true;
-    async function checkBackend() {
-      try {
-        const health = await api.checkHealth();
-        if (isMounted) {
-          setBackendConnected(health.status === 'ok' && health.model_loaded);
-        }
-      } catch {
-        if (isMounted) {
-          setBackendConnected(false);
-        }
-      }
+    let timer;
+
+    async function poll() {
+      const connected = await checkBackend();
+      if (!isMounted) return;
+
+      const delay = connected ? 30000 : 2500;
+      timer = setTimeout(poll, delay);
     }
 
-    checkBackend();
-    const interval = setInterval(checkBackend, 20000);
+    poll();
+
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      clearTimeout(timer);
     };
-  }, []);
+  }, [checkBackend]);
 
   return (
     <div className="flex min-h-screen bg-[#f8fafc] text-slate-800 antialiased selection:bg-indigo-100 selection:text-indigo-900">
@@ -56,12 +66,19 @@ export default function App() {
         />
 
         <main className="flex-1 pb-16">
+          {/* Fullscreen / Floating Cold Start Warmup Modal */}
+          <ServerColdStartOverlay
+            isConnected={backendConnected}
+            onRetry={checkBackend}
+          />
+
           {activeTab === 'dashboard' && (
             <Dashboard setActiveTab={setActiveTab} />
           )}
 
           {activeTab === 'predict' && (
             <PredictDelivery
+              isBackendReady={backendConnected}
               onPredictionSuccess={() => {
                 // optionally show a toast or keep user on predict result
               }}

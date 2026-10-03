@@ -260,26 +260,59 @@ const MONTHS = [
   { value: 12, label: 'December' },
 ];
 
-export default function PredictDelivery({ onPredictionSuccess }) {
+export default function PredictDelivery({ onPredictionSuccess, isBackendReady }) {
   const [formData, setFormData] = useState(INITIAL_FORM);
   const [loading, setLoading] = useState(false);
+  const [loadingElapsed, setLoadingElapsed] = useState(0);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-  const [backendHealth, setBackendHealth] = useState({ loaded: false, status: 'checking' });
+  const [backendHealth, setBackendHealth] = useState({ loaded: isBackendReady || false, status: isBackendReady ? 'connected' : 'checking' });
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [activePreset, setActivePreset] = useState('standard_transit');
 
   useEffect(() => {
+    if (isBackendReady) {
+      setBackendHealth({ loaded: true, status: 'connected' });
+      return;
+    }
+
+    let isMounted = true;
+    let timer;
+
     async function checkStatus() {
       try {
         const health = await api.checkHealth();
-        setBackendHealth({ loaded: health.model_loaded, status: 'connected' });
+        if (isMounted) {
+          setBackendHealth({ loaded: health.model_loaded, status: 'connected' });
+        }
       } catch (e) {
-        setBackendHealth({ loaded: false, status: 'unavailable' });
+        if (isMounted) {
+          setBackendHealth({ loaded: false, status: 'unavailable' });
+          // Auto-retry rapidly every 2.5s during cloud cold-start
+          timer = setTimeout(checkStatus, 2500);
+        }
       }
     }
     checkStatus();
-  }, []);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [isBackendReady]);
+
+  useEffect(() => {
+    let timer;
+    if (loading) {
+      setLoadingElapsed(0);
+      timer = setInterval(() => {
+        setLoadingElapsed((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setLoadingElapsed(0);
+    }
+    return () => clearInterval(timer);
+  }, [loading]);
 
   const handleChange = (field, value) => {
     setActivePreset(null);
@@ -910,10 +943,46 @@ export default function PredictDelivery({ onPredictionSuccess }) {
             </div>
 
             {loading && (
-              <div className="py-12 flex flex-col items-center justify-center text-center space-y-3">
-                <div className="w-12 h-12 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin"></div>
-                <p className="text-sm font-bold text-slate-700">Evaluating 21 Model Signals...</p>
-                <p className="text-xs text-slate-400">Comparing calculated probability against 0.20 threshold</p>
+              <div className="py-8 px-2 flex flex-col items-center justify-center text-center space-y-4">
+                <div className="relative">
+                  <div className="w-14 h-14 rounded-full border-4 border-indigo-100 border-t-indigo-600 animate-spin"></div>
+                  {loadingElapsed >= 4 && (
+                    <span className="absolute inset-0 flex items-center justify-center text-xs font-mono font-bold text-indigo-600">
+                      {loadingElapsed}s
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <p className="text-sm font-bold text-slate-800">
+                    {loadingElapsed < 4 
+                      ? 'Evaluating 21 Model Signals...' 
+                      : 'Waking Up Cloud Inference Container...'}
+                  </p>
+                  <p className="text-xs text-slate-500 max-w-xs">
+                    {loadingElapsed < 4
+                      ? 'Comparing calculated probability against 0.20 threshold'
+                      : 'Render free tier spins up from sleep mode (~35s). Please hold on!'}
+                  </p>
+                </div>
+
+                {loadingElapsed >= 4 && (
+                  <div className="w-full max-w-xs space-y-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div className="flex justify-between text-[11px] font-mono text-slate-500">
+                      <span>Elapsed: {loadingElapsed}s</span>
+                      <span>Target: ~35s</span>
+                    </div>
+                    <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-cyan-500 transition-all duration-300 rounded-full"
+                        style={{ width: `${Math.min(Math.round((loadingElapsed / 35) * 92), 95)}%` }}
+                      ></div>
+                    </div>
+                    <p className="text-[10px] text-indigo-600 font-medium">
+                      ⚡ Subsequent predictions will be instantaneous (&lt;150ms)!
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
